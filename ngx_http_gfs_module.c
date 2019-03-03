@@ -14,6 +14,10 @@ typedef struct {
     ngx_str_t root_dir;
 } ngx_http_gfs_loc_conf_t;
 
+// handler
+static ngx_int_t
+ngx_http_gfs_handler(ngx_http_request_t *r);
+
 // install module and handler
 static char* ngx_http_gfs(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 
@@ -22,6 +26,11 @@ static void* ngx_http_gfs_create_loc_conf(ngx_conf_t *cf);
 
 static char* ngx_http_gfs_merge_loc_conf(ngx_conf_t *cf,
     void *parent, void *child);
+
+// TODO: read client body
+static void gfs_read_client_body(ngx_http_request_t *r);
+
+// TODO: subrequest to upstream
 
 // module directives
 static ngx_command_t  ngx_http_gfs_commands[] = {
@@ -91,48 +100,80 @@ ngx_module_t  ngx_http_gfs_module = {
     NGX_MODULE_V1_PADDING
 };
 
+static void gfs_read_client_body(ngx_http_request_t *r)
+{
+    ngx_chain_t *request_bufs = r->request_body->bufs;
+    ngx_uint_t read = 0;
+    for (ngx_chain_t *cl = request_bufs; cl; cl = cl->next) {
+        ngx_log_error(NGX_LOG_ERR, r->connection->log,
+            0, "reading client body bojun %ui bytes",
+            cl->buf->last - cl->buf->pos);
+        read += cl->buf->last - cl->buf->pos;
+    }
+    ngx_log_error(NGX_LOG_ERR, r->connection->log,
+        0, "bojun totally read %ui bytes", read2);
+
+    // upstream
+
+}
+
+
 static ngx_int_t
 ngx_http_gfs_handler(ngx_http_request_t *r)
 {
     ngx_buf_t *b;
     ngx_chain_t out;
+    ngx_int_t rc;
 
     ngx_http_gfs_loc_conf_t  *gfslcf;
     gfslcf = ngx_http_get_module_loc_conf(r, ngx_http_gfs_module);
 
-    // TODO: process r
-    b = ngx_pcalloc(r->pool, sizeof(ngx_buf_t));
-    if (b == NULL) {
-        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, 
-        "Failed to allocate response buffer.");
-        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    // TODO: process 
+    int read = 0;
+    if (read) {
+        // reading a file
+        b = ngx_pcalloc(r->pool, sizeof(ngx_buf_t));
+        if (b == NULL) {
+            ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, 
+            "Failed to allocate response buffer.");
+            return NGX_HTTP_INTERNAL_SERVER_ERROR;
+        }
+
+        unsigned char* read = ngx_pcalloc(r->pool, gfslcf->chunksize);
+        for (unsigned int i = 0; i < gfslcf->chunksize; i++) {
+            read[i] = '1';
+        }
+        b->pos = read;
+        b->last = read + gfslcf->chunksize;
+
+        // set header
+        r->headers_out.status = NGX_HTTP_OK;
+        r->headers_out.content_length_n = gfslcf->chunksize;
+
+        b->memory = 1; /* content is in read-only memory */
+        /* (i.e., filters should copy it rather than rewrite in place) */
+
+        b->last_buf = 1; /* there will be no more buffers in the request */
+
+        out.buf = b;
+        out.next = NULL;
+
+        rc = ngx_http_send_header(r);
+
+        if (rc == NGX_ERROR || rc > NGX_OK || r->header_only) {
+            return rc;
+        }
+        return ngx_http_output_filter(r, &out);
+    } else {
+        // write a file
+        rc = ngx_http_read_client_request_body(r, gfs_read_client_body);
+        if (rc >= NGX_HTTP_SPECIAL_RESPONSE) {
+            return rc;
+        }
+
+        return NGX_DONE;
     }
 
-    unsigned char* read = ngx_pcalloc(r->pool, gfslcf->chunksize);
-    for (unsigned int i = 0; i < gfslcf->chunksize; i++) {
-        read[i] = '1';
-    }
-    b->pos = read;
-    b->last = read + gfslcf->chunksize;
-
-    // set header
-    r->headers_out.status = NGX_HTTP_OK;
-    r->headers_out.content_length_n = gfslcf->chunksize;
-
-    b->memory = 1; /* content is in read-only memory */
-    /* (i.e., filters should copy it rather than rewrite in place) */
-
-    b->last_buf = 1; /* there will be no more buffers in the request */
-
-    out.buf = b;
-    out.next = NULL;
-
-    ngx_int_t rc = ngx_http_send_header(r);
-
-    if (rc == NGX_ERROR || rc > NGX_OK || r->header_only) {
-        return rc;
-    }
-    return ngx_http_output_filter(r, &out);
 }
 
 static char* ngx_http_gfs(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
