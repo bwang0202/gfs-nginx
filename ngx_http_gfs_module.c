@@ -111,7 +111,7 @@ static void gfs_read_client_body(ngx_http_request_t *r)
         read += cl->buf->last - cl->buf->pos;
     }
     ngx_log_error(NGX_LOG_ERR, r->connection->log,
-        0, "bojun totally read %ui bytes", read2);
+        0, "bojun totally read %ui bytes", read);
 
     // upstream
 
