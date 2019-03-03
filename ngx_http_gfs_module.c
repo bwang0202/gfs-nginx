@@ -61,7 +61,7 @@ static ngx_command_t  ngx_http_gfs_commands[] = {
 };
 
 // module context
-static ngx_http_module_t  ngx_http_circle_gif_module_ctx = {
+static ngx_http_module_t  ngx_http_gfs_module_ctx = {
     NULL,                          /* preconfiguration */
     NULL,                          /* postconfiguration */
 
@@ -76,7 +76,7 @@ static ngx_http_module_t  ngx_http_circle_gif_module_ctx = {
 };
 
 // module definition
-ngx_module_t  ngx_http_circle_gif_module = {
+ngx_module_t  ngx_http_gfs_module = {
     NGX_MODULE_V1,
     &ngx_http_gfs_module_ctx, /* module context */
     ngx_http_gfs_commands,   /* module directives */
