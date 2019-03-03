@@ -23,38 +23,6 @@ static void* ngx_http_gfs_create_loc_conf(ngx_conf_t *cf);
 static char* ngx_http_gfs_merge_loc_conf(ngx_conf_t *cf,
     void *parent, void *child);
 
-static ngx_int_t
-ngx_http_gfs_handler(ngx_http_request_t *r)
-{
-    ngx_buf_t *b;
-    ngx_chain_t out;
-
-    ngx_http_gfs_loc_conf_t  *gfslcf;
-    gfslcf = ngx_http_get_module_loc_conf(r, ngx_http_gfs_module);
-
-    // TODO: process r
-    b = ngx_pcalloc(r->pool, sizeof(ngx_buf_t));
-    if (b == NULL) {
-        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, 
-        "Failed to allocate response buffer.");
-        return NGX_HTTP_INTERNAL_SERVER_ERROR;
-    }
-
-    char* read = ngx_pcalloc(r->pool, gfslcf->chunksize);
-    read[1] = '1';
-    b->pos = read;
-    b->last = read + gfslcf->chunksize;
-
-    b->memory = 1; /* content is in read-only memory */
-    /* (i.e., filters should copy it rather than rewrite in place) */
-
-    b->last_buf = 1; /* there will be no more buffers in the request */
-
-    out.buf = b;
-    out.next = NULL;
-    return ngx_http_output_filter(r, &out);
-}
-
 // module directives
 static ngx_command_t  ngx_http_gfs_commands[] = {
     {   ngx_string("gfs"),
@@ -123,9 +91,53 @@ ngx_module_t  ngx_http_gfs_module = {
     NGX_MODULE_V1_PADDING
 };
 
+static ngx_int_t
+ngx_http_gfs_handler(ngx_http_request_t *r)
+{
+    ngx_buf_t *b;
+    ngx_chain_t out;
+
+    ngx_http_gfs_loc_conf_t  *gfslcf;
+    gfslcf = ngx_http_get_module_loc_conf(r, ngx_http_gfs_module);
+
+    // TODO: process r
+    b = ngx_pcalloc(r->pool, sizeof(ngx_buf_t));
+    if (b == NULL) {
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, 
+        "Failed to allocate response buffer.");
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    unsigned char* read = ngx_pcalloc(r->pool, gfslcf->chunksize);
+    for (unsigned int i = 0; i < gfslcf->chunksize; i++) {
+        read[i] = '1';
+    }
+    b->pos = read;
+    b->last = read + gfslcf->chunksize;
+
+    // set header
+    r->headers_out.status = NGX_HTTP_OK;
+    r->headers_out.content_length_n = gfslcf->chunksize;
+
+    b->memory = 1; /* content is in read-only memory */
+    /* (i.e., filters should copy it rather than rewrite in place) */
+
+    b->last_buf = 1; /* there will be no more buffers in the request */
+
+    out.buf = b;
+    out.next = NULL;
+
+    ngx_int_t rc = ngx_http_send_header(r);
+
+    if (rc == NGX_ERROR || rc > NGX_OK || r->header_only) {
+        return rc;
+    }
+    return ngx_http_output_filter(r, &out);
+}
+
 static char* ngx_http_gfs(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 {
-    ngx_http_gfs_loc_conf_t  *clcf;
+    ngx_http_core_loc_conf_t  *clcf;
 
     clcf = ngx_http_conf_get_module_loc_conf(cf, ngx_http_core_module);
     clcf->handler = ngx_http_gfs_handler;
