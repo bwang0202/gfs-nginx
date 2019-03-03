@@ -4,8 +4,8 @@
 
 #define DEFAULT_BATCH 4
 #define DEFAULT_CHUNKSIZE 64 * 1024 * 1024
-#define DEFAULT_CSID ngx_str_t("default_csid")
-#define DEFAULT_ROOTDIR ngx_str_t("/tmp/")
+#define DEFAULT_CSID "default_csid"
+#define DEFAULT_ROOTDIR "/tmp/"
 
 typedef struct {
     ngx_str_t csid;
@@ -22,6 +22,38 @@ static void* ngx_http_gfs_create_loc_conf(ngx_conf_t *cf);
 
 static char* ngx_http_gfs_merge_loc_conf(ngx_conf_t *cf,
     void *parent, void *child);
+
+static ngx_int_t
+ngx_http_gfs_handler(ngx_http_request_t *r)
+{
+    ngx_buf_t *b;
+    ngx_chain_t out;
+
+    ngx_http_gfs_loc_conf_t  *gfslcf;
+    gfslcf = ngx_http_get_module_loc_conf(r, ngx_http_gfs_module);
+
+    // TODO: process r
+    b = ngx_pcalloc(r->pool, sizeof(ngx_buf_t));
+    if (b == NULL) {
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, 
+        "Failed to allocate response buffer.");
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    char* read = ngx_pcalloc(r->pool, gfslcf->chunksize);
+    read[1] = '1';
+    b->pos = read;
+    b->last = read + gfslcf->chunksize;
+
+    b->memory = 1; /* content is in read-only memory */
+    /* (i.e., filters should copy it rather than rewrite in place) */
+
+    b->last_buf = 1; /* there will be no more buffers in the request */
+
+    out.buf = b;
+    out.next = NULL;
+    return ngx_http_output_filter(r, &out);
+}
 
 // module directives
 static ngx_command_t  ngx_http_gfs_commands[] = {
@@ -112,8 +144,8 @@ ngx_http_gfs_create_loc_conf(ngx_conf_t *cf)
     }
     conf->chunksize = NGX_CONF_UNSET_SIZE;
     conf->max_batch = NGX_CONF_UNSET_UINT;
-    conf->csid = NGX_CONF_UNSET;
-    conf->root_dir = NGX_CONF_UNSET;
+    // conf->csid = NGX_CONF_UNSET;
+    // conf->root_dir = NGX_CONF_UNSET;
     return conf;
 }
 
@@ -135,36 +167,4 @@ static char* ngx_http_gfs_merge_loc_conf(ngx_conf_t *cf,
     }
 
     return NGX_CONF_OK;
-}
-
-static ngx_int_t
-ngx_http_gfs_handler(ngx_http_request_t *r)
-{
-    ngx_buf_t *b;
-    ngx_chain_t out;
-
-    ngx_http_gfs_loc_conf_t  *gfslcf;
-    gfslcf = ngx_http_get_module_loc_conf(r, ngx_http_circle_gif_module);
-
-    // TODO: process r
-    b = ngx_pcalloc(r->pool, sizeof(ngx_buf_t));
-    if (b == NULL) {
-        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, 
-        "Failed to allocate response buffer.");
-        return NGX_HTTP_INTERNAL_SERVER_ERROR;
-    }
-
-    ngx_buf_t read = ngx_pcalloc(r->pool, gfslcf->chunksize);
-    read[1] = 0x01;
-    read->pos = read;
-    read->last = read + gfslcf->chunksize;
-
-    b->memory = 1; /* content is in read-only memory */
-    /* (i.e., filters should copy it rather than rewrite in place) */
-
-    b->last_buf = 1; /* there will be no more buffers in the request */
-
-    out.buf = b;
-    out.next = NULL;
-    return ngx_http_output_filter(r, &out);
 }
