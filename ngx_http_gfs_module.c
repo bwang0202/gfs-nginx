@@ -20,17 +20,22 @@ ngx_http_gfs_handler(ngx_http_request_t *r);
 
 // install module and handler
 static char* ngx_http_gfs(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
-
 // malloc 
 static void* ngx_http_gfs_create_loc_conf(ngx_conf_t *cf);
 
 static char* ngx_http_gfs_merge_loc_conf(ngx_conf_t *cf,
     void *parent, void *child);
 
-// TODO: read client body
+// read client body
 static void gfs_read_client_body(ngx_http_request_t *r);
 
-// TODO: subrequest to upstream
+// subrequest callback
+static ngx_int_t
+gfs_write_subrequest_post_handler(ngx_http_request_t *r,
+    void *data, ngx_int_t rc);
+
+// subrequest write callback
+static void gfs_write_post_handler(ngx_http_request_t *r);
 
 // module directives
 static ngx_command_t  ngx_http_gfs_commands[] = {
@@ -72,7 +77,7 @@ static ngx_command_t  ngx_http_gfs_commands[] = {
 // module context
 static ngx_http_module_t  ngx_http_gfs_module_ctx = {
     NULL,                          /* preconfiguration */
-    NULL,                          /* postconfiguration */
+    NULL,  /* postconfiguration */
 
     NULL,                          /* create main configuration */
     NULL,                          /* init main configuration */
@@ -112,8 +117,6 @@ static void gfs_read_client_body(ngx_http_request_t *r)
     }
     ngx_log_error(NGX_LOG_ERR, r->connection->log,
         0, "bojun totally read %ui bytes", read);
-
-    // upstream
 
 }
 
@@ -168,15 +171,69 @@ ngx_http_gfs_handler(ngx_http_request_t *r)
         // write a file
         rc = ngx_http_read_client_request_body(r, gfs_read_client_body);
         if (rc >= NGX_HTTP_SPECIAL_RESPONSE) {
+            ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, 
+            "bojun rc >= NGX_HTTP_SPECIAL_RESPONSE.");
             return rc;
         }
+
+        ngx_str_t uri = ngx_string("/gfs_put/");
+        ngx_str_t args = ngx_string("a=b");
+        ngx_http_request_t *sr;
+
+        ngx_http_post_subrequest_t *psr = ngx_palloc(r->pool,sizeof(ngx_http_post_subrequest_t));
+        if(psr == NULL) return NGX_HTTP_INTERNAL_SERVER_ERROR;
+        psr->handler = gfs_write_subrequest_post_handler;
+        psr->data = NULL;
+
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, 
+            "bojun issuing subrequest");
+
+        ngx_int_t rc = ngx_http_subrequest(r, &uri, &args, &sr, psr, NGX_HTTP_SUBREQUEST_IN_MEMORY);
+        if(rc != NGX_OK) return NGX_ERROR;
 
         return NGX_DONE;
     }
 
 }
 
-static char* ngx_http_gfs(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
+static ngx_int_t
+gfs_write_subrequest_post_handler(ngx_http_request_t *r,
+    void *data, ngx_int_t rc)
+{
+    ngx_http_request_t *pr = r->parent;
+    pr->headers_out.status = r->headers_out.status;
+
+    ngx_buf_t* pRecvBuf = &r->upstream->buffer;
+    pRecvBuf->pos = pRecvBuf->last;
+
+    pr->write_event_handler = gfs_write_post_handler;
+    return NGX_OK;
+}
+
+static void gfs_write_post_handler(ngx_http_request_t *r)
+{
+    //ngx_int_t ret;
+    // if(r->headers_out.status != NGX_HTTP_OK){
+    //     ngx_http_finalize_request(r, r->headers_out.status);
+    //     return;
+    // }
+    r->headers_out.content_length_n = 1;
+    //r->headers_out.status = NGX_HTTP_OK;
+    ngx_buf_t* b = ngx_create_temp_buf(r->pool, 1);
+    b->last = b->pos + 1;
+    b->last_buf = 1;
+    ngx_chain_t out;
+    out.buf = b;
+    out.next = NULL;
+    r->connection->buffered |= NGX_HTTP_WRITE_BUFFERED;
+    ngx_int_t ret = ngx_http_send_header(r);
+    ret = ngx_http_output_filter(r, &out);
+    ngx_http_finalize_request(r, ret);
+}
+
+
+static char*
+ngx_http_gfs(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 {
     ngx_http_core_loc_conf_t  *clcf;
 
@@ -185,6 +242,7 @@ static char* ngx_http_gfs(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 
     return NGX_CONF_OK;
 }
+
 
 static void *
 ngx_http_gfs_create_loc_conf(ngx_conf_t *cf)
