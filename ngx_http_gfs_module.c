@@ -226,13 +226,15 @@ ngx_http_gfs_handler(ngx_http_request_t *r)
     ngx_http_gfs_loc_conf_t  *gfslcf;
     gfslcf = ngx_http_get_module_loc_conf(r, ngx_http_gfs_module);
 
+    // parse arguments
+    ngx_str_t filename;
+    unsigned int chunk = 0;
+    if (parse_args(r->args, &filename, &chunk, r->connection->log)) {
+        return NGX_ERROR;
+    }
+
     if (r->method == NGX_HTTP_GET) {
-        // parse arguments
-        ngx_str_t filename;
-        unsigned int chunk = 0;
-        if (parse_args(r->args, &filename, &chunk, r->connection->log)) {
-            return NGX_ERROR;
-        }
+
         // reading a file
         b = ngx_pcalloc(r->pool, sizeof(ngx_buf_t));
         if (b == NULL) {
