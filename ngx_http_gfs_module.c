@@ -23,27 +23,27 @@ typedef struct {
 static int
 parse_args(ngx_str_t args, ngx_str_t *filename,
     unsigned int *chunk, ngx_log_t *log) {
-    if (strncmp(args.data, ARGS_FILENAME, strlen(ARGS_FILENAME))) {
-        ngx_log_error(NGX_LOG_ERR, log, "Failed to parse %s[1]", args);
+    if (ngx_strncmp(args.data, ARGS_FILENAME, ngx_strlen(ARGS_FILENAME))) {
+        ngx_log_error(NGX_LOG_ERR, log, 0, "Failed to parse %s[1]", args);
         return 1;
     }
-    filename->data = args.data + strlen(ARGS_FILENAME);
+    filename->data = args.data + ngx_strlen(ARGS_FILENAME);
 
-    char *sign = strstr(args.data, "&");
+    unsigned char *sign = (unsigned char *)ngx_strchr(args.data, '&');
     if (!sign) {
-        ngx_log_error(NGX_LOG_ERR, log, "Failed to parse %s[2]", args);
+        ngx_log_error(NGX_LOG_ERR, log, 0, "Failed to parse %s[2]", args);
         return 1;
     }
 
     filename->len = sign - filename->data;
 
-    if (strncmp(sign + 1, ARGS_CHUNK, strlen(ARGS_CHUNK))) {
-        ngx_log_error(NGX_LOG_ERR, log, "Failed to parse %s[3]", args);
+    if (ngx_strncmp(sign + 1, ARGS_CHUNK, ngx_strlen(ARGS_CHUNK))) {
+        ngx_log_error(NGX_LOG_ERR, log, 0, "Failed to parse %s[3]", args);
         return 1;
     }
 
     unsigned int sum = 0;
-    for (char *tmp = sign + 1 + strlen(ARGS_CHUNK);
+    for (unsigned char *tmp = sign + 1 + ngx_strlen(ARGS_CHUNK);
             tmp < args.data + args.len; tmp++) {
         sum = sum * 10 + (*tmp - '0');
     }
@@ -61,10 +61,10 @@ read_file(unsigned char **buf, const char* root,
         chunk_str[i] = '\0';
     }
     sprintf(chunk_str, "%d", chunk_id);
-    int len = strlen(root) + filename->len + 1 + strlen(chunk_str);
+    int len = ngx_strlen(root) + filename->len + 1 + ngx_strlen(chunk_str);
     char* res = (char*)ngx_pcalloc(r->pool, len+1);
     strcpy(res, root);
-    strncat(res, filename->data, filename->len);
+    strncat(res, (const char*)filename->data, filename->len);
     strcat(res, "/");
     strcat(res, chunk_str);
     res[len] = '\0';
@@ -78,7 +78,7 @@ read_file(unsigned char **buf, const char* root,
 
     /* quit if the file does not exist */
     if (infile == NULL) {
-        ngx_log_error(NGX_LOG_ERR, r->connection->log,
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
             "Failed to read %s[1]", res);
         return 0;
     }
@@ -97,7 +97,7 @@ read_file(unsigned char **buf, const char* root,
 
     /* memory error */
     if (*buf == NULL) {
-        ngx_log_error(NGX_LOG_ERR, r->connection->log,
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
             "Failed to alloc %d[1]", numbytes);
         return 0;
     }
@@ -228,9 +228,9 @@ ngx_http_gfs_handler(ngx_http_request_t *r)
     // TODO: process 
     if (r->method == NGX_HTTP_GET) {
         // parse arguments
-        gx_str_t filename;
+        ngx_str_t filename;
         unsigned int chunk = 0;
-        if (parse_args(r->args, &filename, &chunk)) {
+        if (parse_args(r->args, &filename, &chunk, r->connection->log)) {
             return NGX_ERROR;
         }
 
@@ -244,8 +244,12 @@ ngx_http_gfs_handler(ngx_http_request_t *r)
 
         unsigned char* read;
         size_t read_len;
-        if ((read_len = read_file(&read, root_dir, filename, chunk)) == 0) {
+        if ((read_len = read_file(&read, DEFAULT_ROOTDIR, &filename,
+                chunk, r)) == 0) {
             return NGX_ERROR;
+        }
+        if (read_len > gfslcf->chunksize) {
+            read_len = gfslcf->chunksize;
         }
 
         b->pos = read;
