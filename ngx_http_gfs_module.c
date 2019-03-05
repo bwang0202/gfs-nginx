@@ -2,10 +2,15 @@
 #include <ngx_core.h>
 #include <ngx_http.h>
 
+#include <string.h>
+
 #define DEFAULT_BATCH 4
 #define DEFAULT_CHUNKSIZE 64 * 1024 * 1024
 #define DEFAULT_CSID "default_csid"
 #define DEFAULT_ROOTDIR "/tmp/"
+
+#define ARGS_FILENAME "filename="
+#define ARGS_CHUNK "chunk="
 
 typedef struct {
     ngx_str_t csid;
@@ -13,6 +18,95 @@ typedef struct {
     ngx_uint_t max_batch;
     ngx_str_t root_dir;
 } ngx_http_gfs_loc_conf_t;
+
+// return 0 on success, 1 on error
+static int
+parse_args(ngx_str_t args, ngx_str_t *filename,
+    unsigned int *chunk, ngx_log_t *log) {
+    if (strncmp(args.data, ARGS_FILENAME, strlen(ARGS_FILENAME))) {
+        ngx_log_error(NGX_LOG_ERR, log, "Failed to parse %s[1]", args);
+        return 1;
+    }
+    filename->data = args.data + strlen(ARGS_FILENAME);
+
+    char *sign = strstr(args.data, "&");
+    if (!sign) {
+        ngx_log_error(NGX_LOG_ERR, log, "Failed to parse %s[2]", args);
+        return 1;
+    }
+
+    filename->len = sign - filename->data;
+
+    if (strncmp(sign + 1, ARGS_CHUNK, strlen(ARGS_CHUNK))) {
+        ngx_log_error(NGX_LOG_ERR, log, "Failed to parse %s[3]", args);
+        return 1;
+    }
+
+    unsigned int sum = 0;
+    for (char *tmp = sign + 1 + strlen(ARGS_CHUNK);
+            tmp < args.data + args.len; tmp++) {
+        sum = sum * 10 + (*tmp - '0');
+    }
+    *chunk = sum;
+    return 0;
+}
+
+static size_t
+read_file(unsigned char **buf, const char* root,
+    ngx_str_t* filename, unsigned int chunk_id,
+    ngx_http_request_t *r)
+{
+    char chunk_str[10];
+    for (int i = 0; i < 10; i++) {
+        chunk_str[i] = '\0';
+    }
+    sprintf(chunk_str, "%d", chunk_id);
+    int len = strlen(root) + filename->len + 1 + strlen(chunk_str);
+    char* res = (char*)ngx_pcalloc(r->pool, len+1);
+    strcpy(res, root);
+    strncat(res, filename->data, filename->len);
+    strcat(res, "/");
+    strcat(res, chunk_str);
+    res[len] = '\0';
+
+    /* declare a file pointer */
+    FILE *infile;
+    size_t numbytes;
+
+    /* open an existing file for reading */
+    infile = fopen(res, "r");
+
+    /* quit if the file does not exist */
+    if (infile == NULL) {
+        ngx_log_error(NGX_LOG_ERR, r->connection->log,
+            "Failed to read %s[1]", res);
+        return 0;
+    }
+
+    /* Get the number of bytes */
+    fseek(infile, 0L, SEEK_END);
+    numbytes = ftell(infile);
+
+    /* reset the file position indicator to
+    the beginning of the file */
+    fseek(infile, 0L, SEEK_SET);
+
+    /* grab sufficient memory for the
+    buffer to hold the text */
+    *buf = (unsigned char*)ngx_pcalloc(r->pool, numbytes);
+
+    /* memory error */
+    if (*buf == NULL) {
+        ngx_log_error(NGX_LOG_ERR, r->connection->log,
+            "Failed to alloc %d[1]", numbytes);
+        return 0;
+    }
+
+    /* copy all the text into the buffer */
+    size_t read_len = fread(buf, numbytes, 1, infile);
+    fclose(infile);
+    return read_len;
+}
 
 // handler
 static ngx_int_t
@@ -132,8 +226,14 @@ ngx_http_gfs_handler(ngx_http_request_t *r)
     gfslcf = ngx_http_get_module_loc_conf(r, ngx_http_gfs_module);
 
     // TODO: process 
-    int read = 0;
-    if (read) {
+    if (r->method == NGX_HTTP_GET) {
+        // parse arguments
+        gx_str_t filename;
+        unsigned int chunk = 0;
+        if (parse_args(r->args, &filename, &chunk)) {
+            return NGX_ERROR;
+        }
+
         // reading a file
         b = ngx_pcalloc(r->pool, sizeof(ngx_buf_t));
         if (b == NULL) {
@@ -142,16 +242,18 @@ ngx_http_gfs_handler(ngx_http_request_t *r)
             return NGX_HTTP_INTERNAL_SERVER_ERROR;
         }
 
-        unsigned char* read = ngx_pcalloc(r->pool, gfslcf->chunksize);
-        for (unsigned int i = 0; i < gfslcf->chunksize; i++) {
-            read[i] = '1';
+        unsigned char* read;
+        size_t read_len;
+        if ((read_len = read_file(&read, root_dir, filename, chunk)) == 0) {
+            return NGX_ERROR;
         }
+
         b->pos = read;
-        b->last = read + gfslcf->chunksize;
+        b->last = read + read_len;
 
         // set header
         r->headers_out.status = NGX_HTTP_OK;
-        r->headers_out.content_length_n = gfslcf->chunksize;
+        r->headers_out.content_length_n = read_len;
 
         b->memory = 1; /* content is in read-only memory */
         /* (i.e., filters should copy it rather than rewrite in place) */
@@ -177,7 +279,7 @@ ngx_http_gfs_handler(ngx_http_request_t *r)
         }
 
         ngx_str_t uri = ngx_string("/gfs_put/");
-        ngx_str_t args = ngx_string("a=b");
+        ngx_str_t args = r->args;
         ngx_http_request_t *sr;
 
         ngx_http_post_subrequest_t *psr = ngx_palloc(r->pool,sizeof(ngx_http_post_subrequest_t));
