@@ -93,19 +93,20 @@ read_file(unsigned char **buf, const char* root,
 
     /* grab sufficient memory for the
     buffer to hold the text */
-    *buf = (unsigned char*)ngx_pcalloc(r->pool, numbytes);
+    unsigned char * tmp_buf = ngx_palloc(r->pool, numbytes);
 
     /* memory error */
-    if (*buf == NULL) {
+    if (tmp_buf == NULL) {
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
             "Failed to alloc %d[1]", numbytes);
         return 0;
     }
 
     /* copy all the text into the buffer */
-    size_t read_len = fread(buf, numbytes, 1, infile);
+    size_t read_len = fread(tmp_buf, numbytes, 1, infile);
+    *buf = tmp_buf;
     fclose(infile);
-    return read_len;
+    return read_len * numbytes;
 }
 
 // handler
@@ -225,7 +226,6 @@ ngx_http_gfs_handler(ngx_http_request_t *r)
     ngx_http_gfs_loc_conf_t  *gfslcf;
     gfslcf = ngx_http_get_module_loc_conf(r, ngx_http_gfs_module);
 
-    // TODO: process 
     if (r->method == NGX_HTTP_GET) {
         // parse arguments
         ngx_str_t filename;
@@ -233,7 +233,6 @@ ngx_http_gfs_handler(ngx_http_request_t *r)
         if (parse_args(r->args, &filename, &chunk, r->connection->log)) {
             return NGX_ERROR;
         }
-
         // reading a file
         b = ngx_pcalloc(r->pool, sizeof(ngx_buf_t));
         if (b == NULL) {
