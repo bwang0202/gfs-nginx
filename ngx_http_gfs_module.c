@@ -241,7 +241,7 @@ static void gfs_read_client_body(ngx_http_request_t *r)
     }
 
     // read client data and write to file
-    FILE* fp = fopen(file_path, "w");
+    FILE* fp = fopen(file_path, "w+");
     if (fp == NULL) {
         ngx_log_error(NGX_LOG_ERR, r->connection->log,
                 0, "failed to open %s: %s", file_path, strerror(errno));
