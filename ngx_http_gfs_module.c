@@ -5,12 +5,14 @@
 #include <string.h>
 
 #define DEFAULT_BATCH 4
-#define DEFAULT_CHUNKSIZE 64 * 1024 * 1024
+#define DEFAULT_CHUNKSIZE 4 * 1024
 #define DEFAULT_CSID "default_csid"
 #define DEFAULT_ROOTDIR "/tmp/"
 
 #define ARGS_FILENAME "filename="
 #define ARGS_CHUNK "chunk="
+
+#define my_strncpy(s1, s2, n) strncpy((char *) s1, (const char *) s2, n)
 
 typedef struct {
     ngx_str_t csid;
@@ -52,9 +54,8 @@ parse_args(ngx_str_t args, ngx_str_t *filename,
 }
 
 static size_t
-read_file(unsigned char **buf, const char* root,
-    ngx_str_t* filename, unsigned int chunk_id,
-    ngx_http_request_t *r)
+read_file(unsigned char **buf, const char *root, ngx_str_t* filename,
+    unsigned int chunk_id, ngx_http_request_t *r)
 {
     char chunk_str[10];
     for (int i = 0; i < 10; i++) {
@@ -62,9 +63,9 @@ read_file(unsigned char **buf, const char* root,
     }
     sprintf(chunk_str, "%d", chunk_id);
     int len = ngx_strlen(root) + filename->len + 1 + ngx_strlen(chunk_str);
-    char* res = (char*)ngx_pcalloc(r->pool, len+1);
+    char* res = (char *)ngx_pcalloc(r->pool, len+1);
     strcpy(res, root);
-    strncat(res, (const char*)filename->data, filename->len);
+    strncat(res, (const char *)filename->data, filename->len);
     strcat(res, "/");
     strcat(res, chunk_str);
     res[len] = '\0';
@@ -202,17 +203,107 @@ ngx_module_t  ngx_http_gfs_module = {
 
 static void gfs_read_client_body(ngx_http_request_t *r)
 {
+    ngx_http_gfs_loc_conf_t  *gfslcf;
+    gfslcf = ngx_http_get_module_loc_conf(r, ngx_http_gfs_module);
+    char *root = (char *)gfslcf->root_dir.data;
+
+    // parse arguments
+    ngx_str_t filename;
+    unsigned int chunk_id = 0;
+    if (parse_args(r->args, &filename, &chunk_id, r->connection->log)) {
+        ngx_http_finalize_request(r, NGX_HTTP_INTERNAL_SERVER_ERROR);
+        return;
+    }
+    // get file path
+    char chunk_str[10];
+    for (int i = 0; i < 10; i++) {
+        chunk_str[i] = '\0';
+    }
+    sprintf(chunk_str, "%d", chunk_id);
+    int len = ngx_strlen(root) + filename.len + 1 + ngx_strlen(chunk_str);
+    // file path
+    char* file_path = (char *)ngx_pcalloc(r->pool, len+1);
+    strcpy(file_path, root);
+    strncat(file_path, (const char*)filename.data, filename.len);
+    strcat(file_path, "/");
+    strcat(file_path, chunk_str);
+    file_path[len] = '\0';
+    // dir path
+    char* dir_path = (char *)ngx_pcalloc(r->pool, ngx_strlen(root) + filename.len);
+    strcpy(dir_path, root);
+    strncat(dir_path, (const char*)filename.data, filename.len);
+    dir_path[len] = '\0';
+
+    // create dir if not exists
+    struct stat st = {0};
+    if (stat(dir_path, &st) == -1) {
+        mkdir(dir_path, 0775);
+    }
+
+    // read client data and write to file
+    FILE* fp = fopen(file_path, "w");
+    if (fp == NULL) {
+        ngx_log_error(NGX_LOG_ERR, r->connection->log,
+                0, "failed to open %s: %s", file_path, strerror(errno));
+        ngx_http_finalize_request(r, NGX_HTTP_INTERNAL_SERVER_ERROR);
+        return;
+    }
+
     ngx_chain_t *request_bufs = r->request_body->bufs;
     ngx_uint_t read = 0;
     for (ngx_chain_t *cl = request_bufs; cl; cl = cl->next) {
         ngx_log_error(NGX_LOG_ERR, r->connection->log,
-            0, "reading client body bojun %ui bytes",
-            cl->buf->last - cl->buf->pos);
+                0, "debug delete me reading client body %d bytes",
+                cl->buf->last - cl->buf->pos);
         read += cl->buf->last - cl->buf->pos;
+        if (fwrite(cl->buf->pos, cl->buf->last - cl->buf->pos, 1, fp) != 1) {
+            // TODO how often does this happen, how often does retry help
+            ngx_log_error(NGX_LOG_ERR, r->connection->log,
+                    0, "Failed to read after %d bytes", read);
+            ngx_http_finalize_request(r, NGX_HTTP_INTERNAL_SERVER_ERROR);
+            return;
+        }
     }
     ngx_log_error(NGX_LOG_ERR, r->connection->log,
-        0, "bojun totally read %ui bytes", read);
+        0, "debug delete me totally read %d bytes", read);
 
+    if (fclose(fp)) {
+        ngx_log_error(NGX_LOG_ERR, r->connection->log,
+                0, "Failed to close file");
+        ngx_http_finalize_request(r, NGX_HTTP_INTERNAL_SERVER_ERROR);
+        return;
+    }
+
+    // create subrequest
+    ngx_http_request_t *sr;
+    ngx_str_t uri = ngx_string("/gfs_put/");
+    // create subrequest args
+    size_t new_args_len = r->args.len + 1 + strlen("csid=") + gfslcf->csid.len + 1;
+    char *new_args = ngx_pcalloc(r->pool, new_args_len);
+    my_strncpy(new_args, r->args.data, r->args.len);
+    new_args[r->args.len] = '&';
+    my_strncpy(new_args + r->args.len + 1, "csid=", 5);
+    my_strncpy(new_args + r->args.len + 1 + 5, gfslcf->csid.data, gfslcf->csid.len);
+    ngx_str_t args = {.data = (u_char *)new_args, .len = new_args_len};
+
+    // alloc subrequest assign handler
+    ngx_http_post_subrequest_t *psr = ngx_palloc(r->pool,
+                        sizeof(ngx_http_post_subrequest_t));
+    if(psr == NULL) {
+        ngx_http_finalize_request(r, NGX_HTTP_INTERNAL_SERVER_ERROR);
+        return;
+    }
+    psr->handler = gfs_write_subrequest_post_handler;
+    psr->data = NULL;
+
+    // issue subrequest
+    ngx_int_t rc = ngx_http_subrequest(r, &uri, &args, &sr, psr, NGX_HTTP_SUBREQUEST_IN_MEMORY);
+    if (rc != NGX_OK) {
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, 
+            "Fail issuing subrequest");
+        ngx_http_finalize_request(r, NGX_HTTP_INTERNAL_SERVER_ERROR);
+        return;
+    }
 }
 
 
@@ -226,15 +317,13 @@ ngx_http_gfs_handler(ngx_http_request_t *r)
     ngx_http_gfs_loc_conf_t  *gfslcf;
     gfslcf = ngx_http_get_module_loc_conf(r, ngx_http_gfs_module);
 
-    // parse arguments
-    ngx_str_t filename;
-    unsigned int chunk = 0;
-    if (parse_args(r->args, &filename, &chunk, r->connection->log)) {
-        return NGX_ERROR;
-    }
-
     if (r->method == NGX_HTTP_GET) {
-
+        // parse arguments
+        ngx_str_t filename;
+        unsigned int chunk = 0;
+        if (parse_args(r->args, &filename, &chunk, r->connection->log)) {
+            return NGX_ERROR;
+        }
         // reading a file
         b = ngx_pcalloc(r->pool, sizeof(ngx_buf_t));
         if (b == NULL) {
@@ -245,8 +334,8 @@ ngx_http_gfs_handler(ngx_http_request_t *r)
 
         unsigned char* read;
         size_t read_len;
-        if ((read_len = read_file(&read, DEFAULT_ROOTDIR, &filename,
-                chunk, r)) == 0) {
+        if ((read_len = read_file(&read, (char *)gfslcf->root_dir.data,
+                                  &filename, chunk, r)) == 0) {
             return NGX_ERROR;
         }
         if (read_len > gfslcf->chunksize) {
@@ -282,22 +371,6 @@ ngx_http_gfs_handler(ngx_http_request_t *r)
             "bojun rc >= NGX_HTTP_SPECIAL_RESPONSE.");
             return rc;
         }
-
-        ngx_str_t uri = ngx_string("/gfs_put/");
-        ngx_str_t args = r->args;
-        ngx_http_request_t *sr;
-
-        ngx_http_post_subrequest_t *psr = ngx_palloc(r->pool,sizeof(ngx_http_post_subrequest_t));
-        if(psr == NULL) return NGX_HTTP_INTERNAL_SERVER_ERROR;
-        psr->handler = gfs_write_subrequest_post_handler;
-        psr->data = NULL;
-
-        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, 
-            "bojun issuing subrequest");
-
-        ngx_int_t rc = ngx_http_subrequest(r, &uri, &args, &sr, psr, NGX_HTTP_SUBREQUEST_IN_MEMORY);
-        if(rc != NGX_OK) return NGX_ERROR;
-
         return NGX_DONE;
     }
 
