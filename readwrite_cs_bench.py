@@ -36,5 +36,5 @@ for i in range(20):
 	read(filename)
 read_end = time.time()
 
-print("%d chunks(%d bytes) read in %d seconds" % (num_chunks * 20, chunksize, write_end - write_start))
-print("read throughput %d bytes per seconds" % (num_chunks * 20 * chunksize / (write_end - write_start)))
+print("%d chunks(%d bytes) read in %d seconds" % (num_chunks * 20, chunksize, read_end - read_start))
+print("read throughput %d bytes per seconds" % (num_chunks * 20 * chunksize / (read_end - read_start)))

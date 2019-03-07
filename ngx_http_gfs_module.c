@@ -100,6 +100,9 @@ read_file(unsigned char **buf, const char *root, ngx_str_t* filename,
     if (tmp_buf == NULL) {
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
             "Failed to alloc %d[1]", numbytes);
+        if (infile) {
+            fclose(infile);
+        }
         return 0;
     }
 
