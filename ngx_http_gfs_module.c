@@ -91,31 +91,12 @@ insert_tosync(char *file_path, char *backup_str,
     sqlite3 *db;
     sqlite3_stmt *stmt;
 
-
-    ngx_log_error(NGX_LOG_ERR, log, 0, "debug parsed csid: %d %d",
-                      csids[0], csids[1]);
-
     int rc = sqlite3_open(DB_PATH, &db);
     if (rc != SQLITE_OK) {
         ngx_log_error(NGX_LOG_ERR, log, 0, "Failed to open database: %s",
                       sqlite3_errmsg(db));
         return 1;
     }
-
-    ngx_log_error(NGX_LOG_ERR, log, 0, "debug file path: %s %d",
-                  file_path, strlen(file_path));
-
-    // char *err_msg = 0;
-    // char *sql = "Insert Into ToSync (file_path, cs_id) values (\"/tmp/file/1\", 1);";
-
-    // rc = sqlite3_exec(db, sql, 0, 0, &err_msg);
-    // if (rc != NGX_OK) {
-    //     ngx_log_error(NGX_LOG_ERR, log, 0, "Failed to insert with %s", err_msg);
-    //     sqlite3_errmsg(db);
-    //     sqlite3_free(err_msg);
-    //     sqlite3_close(db);
-    //     return 1;
-    // }
 
     if (sqlite3_prepare(db, "Insert Into ToSync (file_path, cs_id) values (?, ?), (?, ?);",
         -1, &stmt, 0) != SQLITE_OK) {
@@ -395,13 +376,8 @@ static void gfs_read_client_body(ngx_http_request_t *r)
     ngx_chain_t *request_bufs = r->request_body->bufs;
     ngx_uint_t read = 0;
     for (ngx_chain_t *cl = request_bufs; cl; cl = cl->next) {
-        ngx_log_error(NGX_LOG_ERR, r->connection->log,
-                0, "debug delete me reading client body %d bytes",
-                cl->buf->last - cl->buf->pos);
         if (cl->buf->last == cl->buf->pos) continue;
         read += cl->buf->last - cl->buf->pos;
-        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-                        "bojun deleteme %d", cl->buf->last - cl->buf->pos);
         if (fwrite(cl->buf->pos, cl->buf->last - cl->buf->pos, 1, fp) != 1) {
             // TODO how often does this happen, how often does retry help
             ngx_log_error(NGX_LOG_ERR, r->connection->log,
